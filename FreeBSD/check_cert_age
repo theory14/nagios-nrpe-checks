@@ -1,0 +1,154 @@
+#!/bin/sh
+#
+# check_cert_age: Nagios Plugin to monitor the age of your TLS certs
+#
+# This script is intended to be run from a BSD host (written for FreeBSD, should
+# work on OpenBSD and others.
+#
+# Copyright (c) 2020, Chris Gordon
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
+#
+#    * Redistributions of source code must retain the above copyright notice, this
+#      list of conditions and the following disclaimer.
+#    * Redistributions in binary form must reproduce the above copyright notice,
+#      this list of conditions and the following disclaimer in the documentation
+#      and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+#
+# variables
+#
+OPENSSL="/usr/bin/openssl"
+# this expects a BSD date program.
+DATEPROG="/bin/date"
+
+#
+# global vars
+#
+VERSION="1.0.0"
+PROGNAME="${0##*/}"
+PORT=""
+CLIENTOPTS=""
+TARGET="localhost"
+METHOD="HTTPS"
+CRITICAL="7"
+WARNING="14"
+
+version() {
+	printf "Nagios Plugin ${PROGNAME} for checking age of TLS certificates ${VERSION}\n\n"
+	exit 3
+}
+
+usage() {
+	printf "usage:  ${PROGNAME} [options]\n\n"
+	printf "options:\n"
+	printf "  -v\tShow version.\n"
+	printf "  -h\tShow this help message.\n"
+	printf "  -p\tPort number if other than default for the protocol.\n"
+	printf "  -t\tTarget host to monitor. Defaults to localhost.\n"
+	printf "  -m\tProtocol to check.  Valid options are HTTPS, IMAPS and\n"
+	printf "    \tSMTP_TLS.  Default is HTTPS.\n"
+	printf "  -c\tCritical alert if certificate has less than this number of\n"
+	printf "    \tdays before expiration. Defaults to 7 days.\n"
+	printf "  -w\tWarning alert if certificate has less than this number of\n"
+	printf "    \tdays before expiration. Defaults to 7 days.\n"
+
+	exit 3
+}
+
+#
+# main
+#
+while getopts "vhp:t:m:c:w:" OPT; do
+	case ${OPT} in
+		v) version;;
+		h) usage;;
+		p) PORT=${OPTARG};;
+		t) TARGET=${OPTARG};;
+		m) METHOD=${OPTARG};;
+		c) CRITICAL=${OPTARG};;
+		w) WARNING=${OPTARG};;
+		*) usage;;
+	esac
+done
+
+# set check protocol options
+case ${METHOD} in
+	https|HTTPS)
+		if [ -z "${PORT}" ]; then
+			PORT="443"
+		fi
+		CLIENTOPTS=""
+		break
+		;;
+	imaps|IMAPS)
+		if [ -z "${PORT}" ]; then
+			PORT="995"
+		fi
+		CLIENTOPTS=""
+		break
+		;;
+	smtp_tls|SMTP_TLS)
+		if [ -z "${PORT}" ]; then
+			PORT="25"
+		fi
+		CLIENTOPTS="-starttls smtp"
+		break
+		;;
+	*)
+		printf "ERROR:  Protocol of ${METHOD} is not valid.  Must be one of HTTPS, IMAPS or SMTP_TLS\n\n"
+		exit 3
+		;;
+esac
+
+# check that warning age is greater than critical age
+if [ "${WARNING}" -lt "${CRITICAL}" ]; then
+	printf "ERROR:  Warning cert age (-w) must be greater than the critical cert age (-c).\n"
+	exit 3
+fi
+
+
+#
+# perform actual checks
+#
+current_date_seconds=$(${DATEPROG} -j -f "%a %b %d %T %Z %Y" "$(${DATEPROG})" "+%s")
+expire_date=$(echo "Q" | ${OPENSSL} s_client -connect ${TARGET}:${PORT} ${CLIENTOPTS} 2>/dev/null | ${OPENSSL} x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+
+if [ -z "${expire_date}" ]; then
+	printf "ERROR Retrieving certificate."
+	exit 3
+fi
+
+expire_date_seconds=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$(echo ${expire_date})" "+%s")
+seconds_left=$(echo "${expire_date_seconds} - ${current_date_seconds}" | bc)
+days_left=$(echo "${seconds_left} / 86400" | bc)
+
+# generate alerts if needed.  Start with critical as it's the most restrictive
+if [ "${days_left}" -lt "${CRITICAL}" ]; then
+	printf "CERT AGE CRITICAL - days left: ${days_left}\n"
+	exit 2
+elif [ "${days_left}" -lt "${WARNING}" ]; then
+	printf "CERT AGE WARNING - days left: ${days_left}\n"
+	exit 1
+else
+	printf "CERT AGE OK - days left: ${days_left}\n"
+	exit 0
+fi
+
+# catch all exit.  Something broke so return UNKNOWN status
+exit 3
+

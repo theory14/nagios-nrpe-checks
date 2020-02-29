@@ -59,7 +59,7 @@ usage() {
 	printf "  -v\tShow version.\n"
 	printf "  -h\tShow this help message.\n"
 	printf "  -p\tPort number if other than default for the protocol.\n"
-	printf "  -t\tTarget host to monitor. Defaults to localhost.\n"
+	printf "  -H\tHostname to monitor. Defaults to localhost.\n"
 	printf "  -m\tProtocol to check.  Valid options are HTTPS, IMAPS and\n"
 	printf "    \tSMTP_TLS.  Default is HTTPS.\n"
 	printf "  -c\tCritical alert if certificate has less than this number of\n"
@@ -73,12 +73,12 @@ usage() {
 #
 # main
 #
-while getopts "vhp:t:m:c:w:" OPT; do
+while getopts "vhp:H:m:c:w:" OPT; do
 	case ${OPT} in
 		v) version;;
 		h) usage;;
 		p) PORT=${OPTARG};;
-		t) TARGET=${OPTARG};;
+		H) TARGET=${OPTARG};;
 		m) METHOD=${OPTARG};;
 		c) CRITICAL=${OPTARG};;
 		w) WARNING=${OPTARG};;
@@ -97,7 +97,7 @@ case ${METHOD} in
 		;;
 	imaps|IMAPS)
 		if [ -z "${PORT}" ]; then
-			PORT="995"
+			PORT="993"
 		fi
 		CLIENTOPTS=""
 		break
@@ -129,7 +129,7 @@ current_date_seconds=$(${DATEPROG} -j -f "%a %b %d %T %Z %Y" "$(${DATEPROG})" "+
 expire_date=$(echo "Q" | ${OPENSSL} s_client -connect ${TARGET}:${PORT} ${CLIENTOPTS} 2>/dev/null | ${OPENSSL} x509 -noout -enddate 2>/dev/null | cut -d= -f2)
 
 if [ -z "${expire_date}" ]; then
-	printf "ERROR Retrieving certificate."
+	printf "ERROR Retrieving certificate.\n"
 	exit 3
 fi
 
